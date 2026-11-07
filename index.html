@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live TV</title>
+<script>
+// hls.js is pinned to one tested version, with two backup hosts in case the first is blocked or down
+function hlsFallback(i) {
+  var u = ['https://unpkg.com/hls.js@1.5.17/dist/hls.min.js', 'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.17/hls.min.js'];
+  if (i >= u.length) return;
+  var s = document.createElement('script'); s.src = u[i]; s.onerror = function () { hlsFallback(i + 1); }; document.head.appendChild(s);
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js" onerror="hlsFallback(0)"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e8eaf0; --mute:#8b93a7; --accent:#4f8cff; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--text); font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; display:flex; }
+  aside { width:380px; min-width:320px; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; height:100vh; }
+  .controls { padding:12px; display:grid; gap:8px; border-bottom:1px solid var(--line); }
+  input,select,button { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 10px; font:inherit; width:100%; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .opts { display:flex; justify-content:space-between; align-items:center; color:var(--mute); font-size:12.5px; }
+  .opts label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+  .opts button { width:auto; padding:4px 8px; font-size:12px; color:var(--mute); }
+  #count { color:var(--mute); font-size:12.5px; padding:0 12px 8px; }
+  #list { overflow-y:auto; flex:1; }
+  .ch { padding:10px 14px; border-bottom:1px solid var(--line); cursor:pointer; display:flex; justify-content:space-between; gap:10px; }
+  .ch:hover { background:#1d212b; }
+  .ch.active { background:#1b2a47; border-left:3px solid var(--accent); padding-left:11px; }
+  .ch .n { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ch .m { color:var(--mute); font-size:12px; white-space:nowrap; margin-left:auto; }
+  .ch .n { flex:1; min-width:0; }
+  .logo { width:34px; height:24px; object-fit:contain; flex:none; background:#fff1; border-radius:4px; }
+  .logo.none { visibility:hidden; }
+  .ch .n { display:flex; align-items:center; gap:8px; }
+  .ch .n span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #checkBtn { cursor:pointer; }
+  .star { width:auto; background:none; border:0; padding:0 4px; font-size:20px; line-height:1; color:var(--mute); cursor:pointer; }
+  .star:hover { color:#ffd25e; }
+  .star.on { color:#ffc933; }
+  .more { margin:12px; width:calc(100% - 24px); cursor:pointer; }
+  main { flex:1; display:flex; flex-direction:column; padding:16px; gap:10px; min-width:0; }
+  .stage { background:#000; border-radius:12px; overflow:hidden; flex:1; display:flex; align-items:center; justify-content:center; min-height:0; }
+  video { width:100%; height:100%; background:#000; }
+  #now { font-size:18px; font-weight:700; }
+  .bar2 { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+  #quality, #audio, #feed { width:auto; padding:5px 8px; }
+  .pickers { display:flex; gap:8px; }
+  #status { color:var(--mute); min-height:20px; }
+  #status.err { color:#ff7a7a; }
+  #status.ok { color:#6fdc8c; }
+  .head { display:flex; align-items:center; gap:10px; min-width:0; }
+  #toggle { width:auto; flex:none; padding:6px 10px; font-size:16px; line-height:1; cursor:pointer; }
+  #now { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .b { display:inline-block; font-size:10.5px; font-weight:700; line-height:1; padding:3px 5px; border-radius:4px; background:#262b36; color:var(--mute); margin-right:4px; vertical-align:middle; }
+  .b.hd { background:#1d4ed8; color:#fff; }
+  #resume { width:auto; flex:none; padding:6px 12px; background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  #pip { width:auto; padding:5px 9px; cursor:pointer; }
+  #keys { color:var(--mute); font-size:11.5px; padding:0 12px 6px; }
+  .tools { display:flex; gap:8px; }
+  .tools button { width:auto; flex:1; padding:5px 8px; font-size:12px; color:var(--mute); cursor:pointer; }
+  body.collapsed aside { display:none; }
+  @media (max-width:520px){ .ch { padding:13px 12px; } .ch .m { font-size:11px; } .star { font-size:24px; padding:0 8px; } #keys { display:none; } .bar2 { flex-wrap:wrap; } }
+  @media (max-width:800px){ body{flex-direction:column-reverse} aside{width:100%;height:55vh} main{height:45vh} body.collapsed main{height:100vh} }
+</style>
+</head>
+<body>
+<aside>
+  <div class="controls">
+    <input id="q" type="search" placeholder="Search channels…" autocomplete="off">
+    <select id="lang">
+      <option value="">English + Hindi</option>
+      <option value="eng">English only</option>
+      <option value="hin">Hindi only</option>
+      <option value="all">All languages</option>
+    </select>
+    <div class="row">
+      <select id="country"></select>
+      <select id="genre"></select>
+    </div>
+    <select id="view">
+      <option value="">All channels</option>
+      <option value="fav">★ Favorites</option>
+      <option value="recent">🕘 Recently watched</option>
+    </select>
+    <button id="checkBtn" title="Tests every channel in the current list and hides the ones that don't load">Check channels in this list</button>
+    <div class="opts">
+      <label><input type="checkbox" id="hideDead" checked style="width:auto"> Hide dead channels</label>
+      <label title="Only channels with an HD stream (720p or better)"><input type="checkbox" id="hdOnly" style="width:auto"> HD only</label>
+      <button id="resetDead" title="Forget which channels failed">Reset dead list</button>
+    </div>
+  </div>
+  <div class="controls" style="border-top:0;border-bottom:1px solid var(--line);padding-top:0"><div class="tools"><button id="exportBtn" title="Save your favorites and settings to a file you can keep or move to another browser">Export favorites</button><button id="importBtn" title="Load favorites and settings from an exported file">Import</button><input type="file" id="importFile" accept="application/json,.json" hidden></div></div>
+  <div id="count">Loading channels…</div>
+  <div id="keys">Keys: ↑/↓ change channel · L last · F fullscreen · P picture-in-picture · M mute · B list</div>
+  <div id="list"></div>
+</aside>
+<main>
+  <div class="head"><button id="toggle" title="Hide or show the channel list (press B)" aria-label="Toggle channel list" aria-expanded="true">☰</button><div id="now">Pick a channel</div><button id="resume" hidden></button></div>
+  <div class="bar2"><div id="status"></div><div class="pickers"><button id="pip" title="Picture-in-picture (P)" hidden>⧉</button><select id="feed" hidden title="Switch between this channel's sources / language feeds"></select><select id="audio" hidden title="Audio language (only shown when the stream offers several)"></select><select id="quality" hidden title="Video quality (only shown when the channel offers several)"></select></div></div>
+  <div class="stage"><video id="v" controls autoplay playsinline></video></div>
+</main>
+
+<script>
+const API = 'https://iptv-org.github.io/api/';
+const PAGE = 200;
+const $ = id => document.getElementById(id);
+const video = $('v');
+let channels = [], shown = PAGE, activeId = null, hls = null, token = 0, timer = null;
+// "dead" marks carry a time stamp and expire after 3 days, so one bad evening doesn't hide a channel for good
+const DEAD_TTL = 3 * 864e5;
+class Dead extends Map {
+  add(id) { return this.set(id, Date.now()); }
+  has(id) { const t = super.get(id); if (t === undefined) return false; if (Date.now() - t > DEAD_TTL) { super.delete(id); return false; } return true; }
+}
+let dead = new Dead();
+try { for (const e of JSON.parse(localStorage.getItem('deadChannels') || '[]')) { if (Array.isArray(e)) dead.set(e[0], +e[1] || Date.now()); else dead.set(e, Date.now()); } } catch (e) {}
+for (const id of [...dead.keys()]) dead.has(id);
+// The local helper (news_server.py) can relay streams that need special headers or are blocked by the browser.
+let helperOn = false;
+if (/^https?:$/.test(location.protocol)) fetch('/og?ping=1').then(r => r.json()).then(j => { helperOn = !!(j && j.ok); }).catch(() => {});
+const needsHelper = x => !!(x && (x.ref || x.ua));
+const viaHelperUrl = x => '/hls?u=' + encodeURIComponent(x.url) + (x.ref ? '&r=' + encodeURIComponent(x.ref) : '') + (x.ua ? '&a=' + encodeURIComponent(x.ua) : '');
+let lastGood = {}; try { lastGood = JSON.parse(localStorage.getItem('lastGood') || '{}') || {}; } catch (e) {}
+function noteGood(id, url) {
+  lastGood[id] = url; const k = Object.keys(lastGood); if (k.length > 600) delete lastGood[k[0]];
+  try { localStorage.setItem('lastGood', JSON.stringify(lastGood)); } catch (e) {}
+}
+let prevId = null;
+const saveDead = () => localStorage.setItem('deadChannels', JSON.stringify([...dead]));
+let favs = new Set(JSON.parse(localStorage.getItem('favChannels') || '[]'));
+const saveFavs = () => localStorage.setItem('favChannels', JSON.stringify([...favs]));
+let recent = JSON.parse(localStorage.getItem('recentChannels') || '[]');
+function addRecent(id) {
+  recent = [id, ...recent.filter(x => x !== id)].slice(0, 30);
+  localStorage.setItem('recentChannels', JSON.stringify(recent));
+}
+
+const flag = c => c && c.length === 2 ? String.fromCodePoint(...[...c.toUpperCase()].map(x => 127397 + x.charCodeAt(0))) : '🌐';
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+
+// search ignores case, spaces and punctuation, and reads "&" as "and" ("and tv hd" finds "&TV HD")
+const words = t => String(t).toLowerCase().replace(/&/g, ' and ').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+function within1(a, b) {   // edit distance of at most one
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, e = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++e > 1) return false;
+    if (a.length > b.length) i++; else if (a.length < b.length) j++; else { i++; j++; }
+  }
+  return e + (a.length - i) + (b.length - j) <= 1;
+}
+const nearWord = (t, w) => w.includes(t) || (t.length >= 3 && [t.length - 1, t.length, t.length + 1].some(L => w.length >= L && within1(t, w.slice(0, L))));
+// every typed word must match some word of the channel name; one typo is forgiven in longer words
+const matchName = (c, q, nq) => c.key.includes(nq) || (() => { const ts = words(q); return ts.length > 0 && ts.every(t => c.words.some(w => nearWord(t, w))); })();
+const norm = t => String(t).toLowerCase().replace(/&/g, ' and ').replace(/[^\p{L}\p{N}]+/gu, '');
+function loadPrefs() { try { return JSON.parse(localStorage.getItem('tvPrefs') || '{}') || {}; } catch (e) { return {}; } }
+function savePrefs() {
+  try { localStorage.setItem('tvPrefs', JSON.stringify({ lang: $('lang').value, country: $('country').value, genre: $('genre').value, view: $('view').value, hideDead: $('hideDead').checked, hdOnly: $('hdOnly').checked })); } catch (e) {}
+}
+async function load() {
+  try {
+    const [ch, st, co, ca, fd, lg] = await Promise.all(
+      ['channels', 'streams', 'countries', 'categories', 'feeds', 'logos'].map(f =>
+        fetch(API + f + '.json').then(r => r.json()).catch(e => { if (f === 'logos') return []; throw e; }))
+    );
+    const logos = {};
+    for (const l of lg) if (l.channel && l.url && !logos[l.channel]) logos[l.channel] = l.url;
+    const WANT = ['eng', 'hin'];
+    const langs = {}, feedInfo = {};
+    for (const f of fd) {
+      feedInfo[f.channel + '|' + f.id] = { langs: f.languages || [], main: !!f.is_main };
+      for (const l of (f.languages || [])) if (WANT.includes(l)) (langs[f.channel] ||= new Set()).add(l);
+    }
+    countryName = Object.fromEntries(co.map(c => [c.code, c.name]));
+    catName = Object.fromEntries(ca.map(c => [c.id, c.name]));
+    const streams = {};
+    for (const s of st) {
+      if (!s.channel || !s.url) continue;
+      (streams[s.channel] ||= []).push({ url: s.url, info: s.feed ? (feedInfo[s.channel + '|' + s.feed] || null) : null,
+        q: parseInt(s.quality, 10) || 0, ref: s.http_referrer || s.referrer || '', ua: s.user_agent || '' });
+    }
+    channels = ch.filter(c => !c.closed && !c.is_nsfw && !(c.categories || []).includes('xxx') && streams[c.id])
+      .map(c => ({
+        id: c.id, name: c.name, key: norm([c.name, ...(c.alt_names || [])].join(' ')), words: [...new Set(words([c.name, ...(c.alt_names || [])].join(' ')))], country: c.country, langs: [...(langs[c.id] || [])], logo: logos[c.id] || '',
+        cats: (c.categories && c.categories.length) ? c.categories : ['general'],
+        streams: streams[c.id]
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const c of channels) { c.bestQ = Math.max(0, ...c.streams.map(x => x.q)); c.hd = c.bestQ >= 720 || (!c.bestQ && /\bHD\b/i.test(c.name)); }
+
+    const pf = loadPrefs();
+    if (pf.lang !== undefined && [...$('lang').options].some(o => o.value === pf.lang)) $('lang').value = pf.lang;
+    buildFilters();
+    for (const k of ['country', 'genre', 'view']) if (pf[k] !== undefined && [...$(k).options].some(o => o.value === pf[k])) $(k).value = pf[k];
+    if (typeof pf.hideDead === 'boolean') $('hideDead').checked = pf.hideDead;
+    if (typeof pf.hdOnly === 'boolean') $('hdOnly').checked = pf.hdOnly;
+    render();
+    const last = channels.find(c => c.id === localStorage.getItem('lastChannel'));
+    if (last && !activeId) { $('now').textContent = last.name; $('resume').textContent = '▶ Resume'; $('resume').hidden = false; $('resume').onclick = () => play(last); }
+  } catch (e) {
+    $('count').textContent = 'Could not load the channel list. Check your internet connection.';
+  }
+}
+
+let countryName = {}, catName = {};
+// Language filter: default is English + Hindi; "All languages" also includes channels with no language listed.
+function langOk(c) {
+  const v = $('lang').value;
+  if (v === 'all') return true;
+  if (!v) return c.langs.length > 0;
+  return c.langs.includes(v);
+}
+// Country and genre dropdowns only count channels matching the language currently selected.
+function buildFilters() {
+  const list = channels.filter(langOk);
+  const cc = {}, gc = {};
+  list.forEach(c => { cc[c.country] = (cc[c.country] || 0) + 1; c.cats.forEach(g => gc[g] = (gc[g] || 0) + 1); });
+  const keepC = $('country').value, keepG = $('genre').value;
+  $('country').innerHTML = `<option value="">All countries (${list.length})</option>` +
+    Object.keys(cc).sort((a, b) => (countryName[a] || a).localeCompare(countryName[b] || b))
+      .map(c => `<option value="${c}">${flag(c)} ${countryName[c] || c} (${cc[c]})</option>`).join('');
+  $('genre').innerHTML = `<option value="">All genres</option>` +
+    Object.keys(gc).sort().map(g => `<option value="${g}">${catName[g] || cap(g)} (${gc[g]})</option>`).join('');
+  if (cc[keepC]) $('country').value = keepC;
+  if (gc[keepG]) $('genre').value = keepG;
+}
+
+function filtered(ignoreDead = false) {
+  const q = $('q').value.trim().toLowerCase(), co = $('country').value, ge = $('genre').value, hide = $('hideDead').checked && !ignoreDead, view = $('view').value, hdOnly = $('hdOnly').checked;
+  // while searching, language and dead-channel filters step aside so a channel is never hidden from its own name
+  const nq = norm(q), searching = !!nq;
+  const out = channels.filter(c =>
+    (searching || langOk(c)) &&
+    (view !== 'fav' || favs.has(c.id)) && (view !== 'recent' || recent.includes(c.id)) &&
+    (!co || c.country === co) && (!ge || c.cats.includes(ge)) &&
+    (!searching || matchName(c, q, nq)) && (searching || !hide || !dead.has(c.id)) && (searching || !hdOnly || c.hd));
+  if (view === 'recent') out.sort((a, b) => recent.indexOf(a.id) - recent.indexOf(b.id));
+  return out;
+}
+
+function updateCount(n) {
+  $('count').textContent = `${n} channels` + (favs.size ? ` · ${favs.size} favorites` : '') + (dead.size ? ` · ${dead.size} marked dead` : '');
+}
+
+function render(reset = true) {
+  if (reset) shown = PAGE;
+  const list = filtered();
+  updateCount(list.length);
+  const box = $('list');
+  box.innerHTML = list.slice(0, shown).map(c =>
+    `<div class="ch${c.id === activeId ? ' active' : ''}" data-id="${c.id}">
+       <span class="n">${c.logo ? `<img class="logo" src="${esc(c.logo)}" loading="lazy" referrerpolicy="no-referrer" alt="" onerror="this.classList.add('none')">` : '<span class="logo none"></span>'}<span>${esc(c.name)}</span></span>
+       <span class="m">${c.hd ? '<span class="b hd">HD</span>' : ''}${c.streams.length > 1 ? `<span class="b" title="${c.streams.length} sources">×${c.streams.length}</span>` : ''}${c.langs.length ? `<span class="b">${c.langs.map(l => l === 'hin' ? 'HI' : 'EN').join('/')}</span>` : ''}${flag(c.country)} ${c.cats.slice(0, 2).map(cap).join(', ')}</span>
+       <button class="star${favs.has(c.id) ? ' on' : ''}" data-fav="${c.id}" title="Add to favorites" aria-label="Toggle favorite">${favs.has(c.id) ? '★' : '☆'}</button>
+     </div>`).join('');
+  if (list.length > shown) {
+    const b = document.createElement('button');
+    b.className = 'more'; b.textContent = `Show more (${list.length - shown} left)`;
+    b.onclick = () => { shown += PAGE; render(false); };
+    box.appendChild(b);
+  }
+  if (!list.length) {
+    const sq = $('q').value.trim();
+    if (sq) box.innerHTML = `<div style="padding:24px 16px;color:var(--mute)">No channel matching “${esc(sq)}” has a stream in the public list (or the country/genre/favorites filters are hiding it). Clear those filters and try a shorter name, e.g. “tv”.</div>`;
+    else box.innerHTML = '<div style="padding:24px 16px;color:var(--mute)">No channels to show. Try "All languages", clear the country/genre filters, or press "Reset dead list".</div>';
+  }
+  if (reset) box.scrollTop = 0;
+}
+const esc = s => s.replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+
+function setStatus(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
+
+function stop() {
+  clearTimeout(timer);
+  if (hls) { hls.destroy(); hls = null; }
+  video.removeAttribute('src'); video.load();
+}
+
+let qualityPref = localStorage.getItem('qualityPref') || 'auto';   // 'auto' | 'max' | 'h:720' ...
+// A channel can have several feeds (e.g. a Hindi one and an English one). Try the feeds that match
+// the language filter first, then unknown ones, then the rest; the main feed wins ties.
+function orderedStreams(ch) {
+  const v = $('lang').value;
+  const want = v === 'eng' ? ['eng'] : v === 'hin' ? ['hin'] : v === '' ? ['eng', 'hin'] : [];
+  const rank = s => {
+    if (!want.length) return 0;
+    if (!s.info || !s.info.langs.length) return 1;
+    return s.info.langs.some(l => want.includes(l)) ? 0 : 2;
+  };
+  return ch.streams.map((s, i) => ({ s, i }))
+    // same language rank: the source that worked last time, then higher quality, then the channel's main feed
+    .sort((a, b) => rank(a.s) - rank(b.s) || (b.s.url === lastGood[ch.id]) - (a.s.url === lastGood[ch.id]) || (b.s.q - a.s.q) ||
+      (b.s.info && b.s.info.main ? 1 : 0) - (a.s.info && a.s.info.main ? 1 : 0) || a.i - b.i)
+    .map(x => x.s);
+}
+let langNames = null;
+function langName(code) {
+  try { langNames = langNames || new Intl.DisplayNames(['en'], { type: 'language' }); return langNames.of(code) || code; }
+  catch (e) { return code; }
+}
+const qLabel = s => s && s.q ? ' · ' + s.q + 'p' : '';
+const feedLabel = s => (s && s.info && s.info.langs.length) ? ' · ' + s.info.langs.slice(0, 3).map(langName).join(' + ') : '';
+
+// Audio language picker: shown when one stream carries several audio tracks.
+const sameLang = (a, b) => !!a && !!b && String(a).slice(0, 2).toLowerCase() === String(b).slice(0, 2).toLowerCase();
+let audioPref = localStorage.getItem('audioPref') || '';
+function buildAudio() {
+  const sel = $('audio');
+  const tr = hls ? hls.audioTracks || [] : [];
+  if (tr.length < 2) {
+    sel.innerHTML = '<option>Audio: single track</option>'; sel.disabled = true; sel.hidden = false;
+    sel.title = 'This stream carries one audio track, so there is nothing to switch. If the channel has other language feeds, use the Source menu.';
+    return;
+  }
+  sel.disabled = false; sel.title = 'Audio language';
+  sel.innerHTML = tr.map((t, i) => `<option value="${i}">${esc(t.name || langName(t.lang) || ('Audio ' + (i + 1)))}</option>`).join('');
+  sel.hidden = false;
+  // pick: remembered choice, else the language filter, else leave the stream's default
+  const v = $('lang').value, filterLang = v === 'hin' ? 'hi' : v === 'eng' ? 'en' : '';
+  const want = audioPref || filterLang;
+  let idx = want ? tr.findIndex(t => sameLang(t.lang, want) || sameLang(t.name, want)) : -1;
+  if (idx < 0) idx = hls.audioTrack >= 0 ? hls.audioTrack : 0;
+  if (hls.audioTrack !== idx) hls.audioTrack = idx;
+  sel.value = String(idx);
+}
+$('audio').addEventListener('change', () => {
+  if (!hls) return;
+  const i = +$('audio').value, t = (hls.audioTracks || [])[i];
+  hls.audioTrack = i;
+  if (t && t.lang) { audioPref = t.lang; try { localStorage.setItem('audioPref', audioPref); } catch (e) {} }
+});
+
+let qMap = null;                                                         // height -> level index, for the current stream
+
+function buildQuality() {
+  const sel = $('quality');
+  qMap = new Map();
+  if (!hls) { sel.hidden = true; return; }
+  hls.levels.forEach((l, i) => {
+    const h = l.height || 0;
+    if (!h) return;
+    const cur = qMap.get(h);
+    if (cur === undefined || (l.bitrate || 0) > (hls.levels[cur].bitrate || 0)) qMap.set(h, i);
+  });
+  const heights = [...qMap.keys()].sort((a, b) => b - a);
+  if (heights.length < 2) { sel.hidden = true; return; }
+  sel.innerHTML = '<option value="auto">Auto quality</option><option value="max">Highest</option>' +
+    heights.map(h => `<option value="h:${h}">${h}p</option>`).join('');
+  sel.hidden = false;
+  applyQuality();
+}
+function applyQuality() {
+  if (!hls || !qMap || !qMap.size) return;
+  const heights = [...qMap.keys()].sort((a, b) => b - a);
+  const sel = $('quality');
+  if (qualityPref === 'auto') { hls.currentLevel = -1; sel.value = 'auto'; return; }
+  let use = heights[0];
+  if (qualityPref.startsWith('h:')) {
+    const want = +qualityPref.slice(2);
+    const below = heights.filter(h => h <= want);
+    use = below.length ? below[0] : heights[heights.length - 1];   // nearest available, never above what was asked
+  }
+  hls.currentLevel = qMap.get(use);
+  sel.value = qualityPref === 'max' ? 'max' : 'h:' + use;
+}
+$('quality').addEventListener('change', () => {
+  qualityPref = $('quality').value;
+  localStorage.setItem('qualityPref', qualityPref);
+  applyQuality();
+});
+
+function play(ch, idx = 0, list = orderedStreams(ch), manual = false, viaHelper = false) {
+  const my = ++token;
+  stop();
+  if (activeId && activeId !== ch.id) prevId = activeId;
+  activeId = ch.id;
+  $('resume').hidden = true;
+  $('now').textContent = ch.name;
+  $('quality').hidden = true; $('audio').hidden = true;
+  const fsel = $('feed');
+  if (list.length > 1) {
+    fsel.innerHTML = list.map((x, k) => `<option value="${k}">Source ${k + 1}${qLabel(x)}${feedLabel(x) || ' · language unknown'}</option>`).join('');
+    fsel.value = String(idx); fsel.hidden = false; fsel.onchange = () => play(ch, +fsel.value, list, true);
+  } else fsel.hidden = true;
+  const useHelper = helperOn && (viaHelper || needsHelper(list[idx]));
+  const url = useHelper ? viaHelperUrl(list[idx]) : list[idx].url;
+  setStatus(`Connecting… (source ${idx + 1} of ${list.length}${useHelper ? ' · via helper' : ''})`);
+  let started = false, netTries = 0, mediaTries = 0;
+
+  const fail = () => {
+    if (my !== token) return;
+    stop();
+    if (helperOn && !useHelper) return play(ch, idx, list, manual, true);   // second chance: let the helper fetch it (fixes browser-blocked streams)
+    if (manual) { setStatus(`Source ${idx + 1} isn't working. Pick another source from the menu.`, 'err'); return; }   // your own pick failing never marks the channel dead
+    if (idx + 1 < list.length) return play(ch, idx + 1, list);
+    if (!helperOn && list.some(needsHelper)) { setStatus('Some sources of this channel only work through the helper. Run news_server.py and open this page from http://localhost:8000/live-tv.html', 'err'); render(false); return; }
+    dead.add(ch.id); saveDead();
+    setStatus('This channel is not working right now (offline, geo-blocked or blocked by the browser). Marked as dead.', 'err');
+    render(false);
+  };
+  video.onplaying = () => {
+    if (my !== token) return;
+    clearTimeout(timer); setStatus('Playing' + qLabel(list[idx]) + feedLabel(list[idx]) + (useHelper ? ' · via helper' : ''), 'ok');
+    if (!started) { started = true; if (dead.delete(ch.id)) saveDead(); addRecent(ch.id); noteGood(ch.id, list[idx].url); try { localStorage.setItem('lastChannel', ch.id); } catch (e) {} }
+  };
+  video.onwaiting = () => { if (my === token && started) setStatus('Buffering…'); };
+  timer = setTimeout(fail, useHelper ? 9000 : 12000);
+
+  if (window.Hls && Hls.isSupported()) {
+    hls = new Hls({
+      lowLatencyMode: false,           // normal live streams buffer more smoothly this way
+      liveSyncDurationCount: 5,        // stay a bit further behind live so short slowdowns don't stall
+      maxBufferLength: 60, maxMaxBufferLength: 120, backBufferLength: 30,
+      abrEwmaDefaultEstimate: 5000000, // assume a decent connection at the start, so streams don't begin blurry
+      manifestLoadingTimeOut: 8000, levelLoadingTimeOut: 8000,
+      fragLoadingMaxRetry: 6, levelLoadingMaxRetry: 2
+    });
+    hls.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal || my !== token) return;
+      if (started) {   // already playing: try to recover instead of giving up on the channel
+        if (d.type === Hls.ErrorTypes.NETWORK_ERROR && netTries++ < 5) { setStatus('Connection hiccup, retrying…'); hls.startLoad(); return; }
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && mediaTries++ < 3) { setStatus('Recovering…'); hls.recoverMediaError(); return; }
+      }
+      fail();
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); buildQuality(); buildAudio(); });
+    hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => { if (my === token) buildAudio(); });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+  } else {
+    video.src = url;
+    video.onerror = fail;
+    video.play().catch(() => {});
+  }
+  document.querySelectorAll('.ch').forEach(e => e.classList.toggle('active', e.dataset.id === ch.id));
+}
+
+$('list').addEventListener('click', e => {
+  const star = e.target.closest('.star');
+  if (star) {
+    const id = star.dataset.fav;
+    favs.has(id) ? favs.delete(id) : favs.add(id);
+    saveFavs();
+    if ($('view').value === 'fav') {
+      const top = $('list').scrollTop;
+      render(false);
+      $('list').scrollTop = top;
+    } else {
+      const on = favs.has(id);
+      star.classList.toggle('on', on);
+      star.textContent = on ? '★' : '☆';
+      updateCount(filtered().length);
+    }
+    return;
+  }
+  const el = e.target.closest('.ch');
+  if (!el) return;
+  const ch = channels.find(c => c.id === el.dataset.id);
+  if (ch) play(ch);
+});
+// Tests streams by loading their playlist with hls.js (same way playback works), without watching them.
+function testStream(url) {
+  return new Promise(resolve => {
+    let done = false;
+    const h = new Hls({ manifestLoadingMaxRetry: 0, levelLoadingMaxRetry: 0, manifestLoadingTimeOut: 7000, levelLoadingTimeOut: 7000 });
+    const end = ok => { if (done) return; done = true; clearTimeout(t); try { h.destroy(); } catch (e) {} resolve(ok); };
+    const t = setTimeout(() => end(false), 9000);
+    h.on(Hls.Events.LEVEL_LOADED, () => end(true));
+    h.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) end(false); });
+    h.attachMedia(document.createElement('video'));
+    h.loadSource(url);
+  });
+}
+
+let checking = false, stopCheck = false;
+async function checkAll() {
+  const btn = $('checkBtn');
+  if (checking) { stopCheck = true; btn.textContent = 'Stopping…'; return; }
+  if (!(window.Hls && Hls.isSupported())) { alert('Checking needs Chrome, Edge or Firefox on a computer.'); return; }
+  const list = filtered(true);
+  if (!list.length) return;
+  if (list.length > 300 && !confirm(`This list has ${list.length} channels, so checking may take a while. Tip: pick a country or genre first. Continue?`)) return;
+  checking = true; stopCheck = false;
+  let next = 0, doneCount = 0, bad = 0;
+  const label = () => { btn.textContent = `Checking ${doneCount}/${list.length} · ${bad} dead — click to stop`; };
+  label();
+  const worker = async () => {
+    while (!stopCheck && next < list.length) {
+      const c = list[next++];
+      let ok = false;
+      for (const x of orderedStreams(c).slice(0, 3)) {
+        if (stopCheck) break;
+        if (helperOn && needsHelper(x) ? await testStream(viaHelperUrl(x)) : (await testStream(x.url) || (helperOn && await testStream(viaHelperUrl(x))))) { ok = true; break; }
+      }
+      if (stopCheck && !ok) break;
+      if (ok) dead.delete(c.id); else { dead.add(c.id); bad++; }
+      doneCount++; label();
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  saveDead();
+  checking = false;
+  btn.textContent = stopCheck ? `Stopped: ${doneCount} checked, ${bad} hidden` : `Done: ${doneCount} checked, ${bad} dead channels hidden`;
+  stopCheck = false;
+  render();
+}
+$('checkBtn').onclick = checkAll;
+
+$('lang').addEventListener('change', () => { buildFilters(); render(); savePrefs(); });
+
+['q', 'country', 'genre', 'hideDead', 'view', 'hdOnly'].forEach(id => $(id).addEventListener(id === 'q' ? 'input' : 'change', () => { render(); if (id !== 'q') savePrefs(); }));
+// Collapsible channel list (remembered, and press B to toggle).
+function setCollapsed(c) {
+  document.body.classList.toggle('collapsed', c);
+  $('toggle').setAttribute('aria-expanded', String(!c));
+  $('toggle').title = c ? 'Show the channel list (press B)' : 'Hide the channel list (press B)';
+  try { localStorage.setItem('sidebarCollapsed', c ? '1' : '0'); } catch (e) {}
+}
+$('toggle').onclick = () => setCollapsed(!document.body.classList.contains('collapsed'));
+function zap(d) {
+  const list = filtered(); if (!list.length) return;
+  let i = list.findIndex(c => c.id === activeId);
+  i = i < 0 ? (d > 0 ? 0 : list.length - 1) : Math.min(list.length - 1, Math.max(0, i + d));
+  if (list[i].id === activeId) return;
+  if (i >= shown) { shown = i + PAGE; render(false); }
+  play(list[i]);
+  const row = document.querySelector('.ch.active'); if (row) row.scrollIntoView({ block: 'nearest' });
+}
+function togglePip() {
+  if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+  else if (video.requestPictureInPicture) video.requestPictureInPicture().catch(() => {});
+}
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'b') setCollapsed(!document.body.classList.contains('collapsed'));
+  else if (k === 'm') video.muted = !video.muted;
+  else if (k === 'f') { if (document.fullscreenElement) document.exitFullscreen(); else if (video.requestFullscreen) video.requestFullscreen().catch(() => {}); }
+  else if (k === 'p') togglePip();
+  else if (k === 'l') { const c = prevId && channels.find(x => x.id === prevId); if (c) play(c); }
+  else if (tag !== 'VIDEO' && (e.key === 'ArrowDown' || e.key === 'PageDown')) { e.preventDefault(); zap(1); }
+  else if (tag !== 'VIDEO' && (e.key === 'ArrowUp' || e.key === 'PageUp')) { e.preventDefault(); zap(-1); }
+});
+$('pip').onclick = togglePip;
+if (document.pictureInPictureEnabled) $('pip').hidden = false;
+
+// Export / import favorites and settings (they live in this browser only, so this is how to move or back them up)
+$('exportBtn').onclick = () => {
+  const data = { app: 'live-tv', version: 1, favorites: [...favs], recent, prefs: loadPrefs(), audioPref: localStorage.getItem('audioPref') || '', qualityPref };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+  a.download = 'live-tv-favorites.json'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  setStatus(`Exported ${favs.size} favorites`, 'ok');
+};
+$('importBtn').onclick = () => $('importFile').click();
+$('importFile').onchange = async () => {
+  const f = $('importFile').files[0]; $('importFile').value = '';
+  if (!f) return;
+  try {
+    if (f.size > 2e6) throw 0;
+    const d = JSON.parse(await f.text());
+    if (!d || d.app !== 'live-tv') throw 0;
+    const ids = a => (Array.isArray(a) ? a : []).filter(x => typeof x === 'string' && x.length < 200).slice(0, 5000);
+    const before = favs.size;
+    ids(d.favorites).forEach(x => favs.add(x)); saveFavs();
+    recent = [...new Set([...recent, ...ids(d.recent)])].slice(0, 30); localStorage.setItem('recentChannels', JSON.stringify(recent));
+    if (d.prefs && typeof d.prefs === 'object') {
+      const pf = loadPrefs(), ok = ['lang', 'country', 'genre', 'view'];
+      for (const k of ok) if (typeof d.prefs[k] === 'string') pf[k] = d.prefs[k];
+      for (const k of ['hideDead', 'hdOnly']) if (typeof d.prefs[k] === 'boolean') pf[k] = d.prefs[k];
+      localStorage.setItem('tvPrefs', JSON.stringify(pf));
+      if (pf.lang !== undefined && [...$('lang').options].some(o => o.value === pf.lang)) $('lang').value = pf.lang;
+      buildFilters();
+      for (const k of ['country', 'genre', 'view']) if (pf[k] !== undefined && [...$(k).options].some(o => o.value === pf[k])) $(k).value = pf[k];
+      if (typeof pf.hideDead === 'boolean') $('hideDead').checked = pf.hideDead;
+      if (typeof pf.hdOnly === 'boolean') $('hdOnly').checked = pf.hdOnly;
+    }
+    if (typeof d.qualityPref === 'string' && /^(auto|max|h:\d{3,4})$/.test(d.qualityPref)) { qualityPref = d.qualityPref; localStorage.setItem('qualityPref', qualityPref); }
+    render();
+    setStatus(`Imported: ${favs.size - before} new favorites added (${favs.size} total)`, 'ok');
+  } catch (e) { setStatus("That file isn't a Live TV export.", 'err'); }
+};
+try { if (localStorage.getItem('sidebarCollapsed') === '1') setCollapsed(true); } catch (e) {}
+$('resetDead').onclick = () => { dead.clear(); saveDead(); render(); };
+load();
+</script>
+</body>
+</html>
